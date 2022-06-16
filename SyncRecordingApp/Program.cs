@@ -81,7 +81,7 @@ namespace SyncRecordingApp
 
             // http client to communicate with Rokoko Studio
 
-            HttpClient httpClient = CreateClient(COMMAND_API_DEFAULT_PORT, "localhost");
+            HttpClient httpClient = CreateClient(COMMAND_API_DEFAULT_PORT, "127.0.0.1"); // NOTE: localhost is slow due to attemp to connect to IPv6 localhost first
 
             // start UDP server to communicate with Optitrack Motive
 
@@ -327,8 +327,11 @@ namespace SyncRecordingApp
 
         private static HttpClient CreateClient(int port, string url)
         {
-            HttpClient client = new HttpClient();
-            
+            HttpClient client = new HttpClient(new HttpClientHandler
+            {
+                UseProxy = false
+            });
+
             client.BaseAddress = new Uri($"http://{url}:{port}/");
             client.DefaultRequestHeaders.Accept.Clear();
             client.DefaultRequestHeaders.Add("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
