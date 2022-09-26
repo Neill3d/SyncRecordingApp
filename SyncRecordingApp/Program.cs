@@ -1,4 +1,12 @@
-﻿using Newtonsoft.Json;
+﻿/// <summary>
+/// Sync Recording App
+/// This is an application to syncronize recording commands between Optitrack Motive and Rokoko Studio
+/// github repository - https://github.com/Neill3d/SyncRecordingApp
+/// Developed by Sergei <Neill3d> Solokhin 2022
+/// </summary>
+/// 
+
+using Newtonsoft.Json;
 using System;
 using System.Diagnostics;
 using System.Net;
@@ -9,13 +17,6 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
 
-/// <summary>
-/// Sync Recording App
-/// This is an application to syncronize recording commands between Optitrack Motive and Rokoko Studio
-/// github repository - https://github.com/Neill3d/SyncRecordingApp
-/// Developed by Sergei <Neill3d> Solokhin 2022
-/// </summary>
-
 // NOTE: about Optitrack Motive XML broadcasting
 // When triggering via XML messages, the Remote Trigger setting under Advanced Network Settings must be set to true.
 
@@ -24,14 +25,7 @@ using System.Xml;
 
 namespace SyncRecordingApp
 {
-    [Serializable]
-    public class DeviceCommandInput
-    {
-        public string deviceName = "";
-        public float countdown_delay = 4;
-        public string filename = "";
-    }
-
+    
     [Serializable]
     public class ResponseMessage
     {
@@ -56,16 +50,22 @@ namespace SyncRecordingApp
         v to toggle verbose
         q to exit";
 
+        public static int commandAPIPort = COMMAND_API_DEFAULT_PORT;
+        public static string commandAPIKey = API_KEY;
+
         // This is the port Motive is sending/listening commands
         public const int PORT_COMMAND_XML2 = 1510;
         public const int PORT_COMMAND_XML = 1512;
 
+        public static int portCommandXML = PORT_COMMAND_XML;
         private static bool sendXMLCommands = true;
         private static bool receiveXMLCommands = true;
         private static bool verbose = true;
 
         private const string MOTIVE_CAPTURE_START_COMMAND = "CaptureStart";
         private const string MOTIVE_CAPTURE_STOP_COMMAND = "CaptureStop";
+
+        private static float frameRate = 30.0f;
 
         private static bool isRunning = true;
         private static int processID = 0;
@@ -74,6 +74,26 @@ namespace SyncRecordingApp
 
         static void Main(string[] args)
         {
+            IniParser settings = new IniParser("settings.ini");
+            
+            if (settings.isEmpty)
+            {
+                settings.AddSetting("XML Commands", "Do Send", true);
+                settings.AddSetting("XML Commands", "Do Receive", true);
+                settings.AddSetting("XML Commands", "Port", PORT_COMMAND_XML);
+
+                settings.AddSetting("Command API", "Port", COMMAND_API_DEFAULT_PORT);
+                settings.AddSetting("Command API", "Key", API_KEY);
+                settings.SaveSettings();
+            }
+
+            sendXMLCommands = settings.GetSetting("XML Commands", "Do Send", true);
+            receiveXMLCommands = settings.GetSetting("XML Commands", "Do Receive", true);
+            portCommandXML = settings.GetSetting("XML Commands", "Port", PORT_COMMAND_XML);
+
+            commandAPIPort = settings.GetSetting("Command API", "Port", COMMAND_API_DEFAULT_PORT);
+            commandAPIKey = settings.GetSetting("Command API", "Key", API_KEY);
+
             processID = Process.GetCurrentProcess().Id;
             Console.WriteLine($"Current Process ID {processID}");
 
@@ -81,14 +101,14 @@ namespace SyncRecordingApp
 
             // http client to communicate with Rokoko Studio
 
-            HttpClient httpClient = CreateClient(COMMAND_API_DEFAULT_PORT, "127.0.0.1"); // NOTE: localhost is slow due to attemp to connect to IPv6 localhost first
+            HttpClient httpClient = CreateClient(commandAPIPort, "127.0.0.1"); // NOTE: localhost is slow due to attemp to connect to IPv6 localhost first
 
             // start UDP server to communicate with Optitrack Motive
 
             UdpClient udpClient = new UdpClient();
             udpClient.EnableBroadcast = true;
             udpClient.ExclusiveAddressUse = false;
-            udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, PORT_COMMAND_XML));
+            udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, portCommandXML));
             
             if (receiveXMLCommands)
             {
@@ -106,11 +126,11 @@ namespace SyncRecordingApp
                         lastRecordingName = Console.ReadLine();
                         if (lastRecordingName != "")
                         {
-                            SendRecordingCommand(true, lastRecordingName, "0:0:0:0", "", httpClient, sendXMLCommands ? udpClient : null);
+                            SendRecordingCommand(true, lastRecordingName, "0:0:0:0", frameRate, "", httpClient, sendXMLCommands ? udpClient : null);
                         }
                         break;
                     case 'z':
-                        SendRecordingCommand(false, lastRecordingName, "0:0:0:0", "", httpClient, sendXMLCommands ? udpClient : null);
+                        SendRecordingCommand(false, lastRecordingName, "0:0:0:0", frameRate, "", httpClient, sendXMLCommands ? udpClient : null);
                         break;
                     case 'c':
                         SendCalibrateCommand(httpClient);
@@ -153,7 +173,7 @@ namespace SyncRecordingApp
 
         private static async void StartUdpClientListening(HttpClient httpClient, UdpClient udpClient)
         {
-            var from = new IPEndPoint(IPAddress.Any, PORT_COMMAND_XML-2);
+            var from = new IPEndPoint(IPAddress.Any, portCommandXML - 2);
 
             await Task.Run(() =>
             {
@@ -192,7 +212,7 @@ namespace SyncRecordingApp
                             node = xml.SelectSingleNode($"{captureCommand}/TimeCode");
                             string timeCode = (node != null) ? node.Attributes["VALUE"].Value : "0:0:0:0";
 
-                            SendRecordingCommand(isStart: isStartRecording, recordingName, timeCode, "", httpClient, null);
+                            SendRecordingCommand(isStart: isStartRecording, recordingName, timeCode, frameRate, "", httpClient, null);
                         }
                     }
                     catch (Exception ex)
@@ -227,13 +247,22 @@ namespace SyncRecordingApp
 
             string requestUri = $"{GetApiBaseRoute()}/calibrate";
             HttpResponseMessage responseMessage = null;
+            CommandAPICalibrationInput input = new CommandAPICalibrationInput()
+            {
+                deviceID = "",
+                countdownDelay = 1
+            };
+
+            string jsonCommandInput = JsonConvert.SerializeObject(input);
+            byte[] inputData = Encoding.ASCII.GetBytes(jsonCommandInput);
+            HttpContent httpContent = new ByteArrayContent(inputData);
 
             try
             {
                 // send to Rokoko Studio
                 if (httpClient != null)
                 {
-                    responseMessage = await httpClient.PostAsync(requestUri, null);
+                    responseMessage = await httpClient.PostAsync(requestUri, httpContent);
                 }
             }
             catch (Exception e)
@@ -244,7 +273,7 @@ namespace SyncRecordingApp
             UnpackHttpResponce(responseMessage);
         }
 
-        private static async Task SendRecordingCommand(bool isStart, string recordingName, string timeCode, string actorName, HttpClient httpClient, UdpClient udpClient)
+        private static async Task SendRecordingCommand(bool isStart, string recordingName, string timeCode, float frameRate, string actorName, HttpClient httpClient, UdpClient udpClient)
         {
             DateTime dateTime = DateTime.Now;
             Console.WriteLine($"[{dateTime}] request - Send A Command to Studio");
@@ -252,14 +281,14 @@ namespace SyncRecordingApp
             Stopwatch stopwatch = Stopwatch.StartNew();
 
             HttpResponseMessage responseMessage = null;
-            DeviceCommandInput suitCommandInput = new DeviceCommandInput()
+            CommandAPIRecordingInput input = new CommandAPIRecordingInput()
             {
-                countdown_delay = 3,
                 filename = recordingName,
-                deviceName = actorName
+                time = timeCode,
+                frameRate = frameRate
             };
             
-            string jsonCommandInput =  JsonConvert.SerializeObject(suitCommandInput);
+            string jsonCommandInput =  JsonConvert.SerializeObject(input);
             byte[] inputData = Encoding.ASCII.GetBytes(jsonCommandInput);
             HttpContent httpContent = new ByteArrayContent(inputData);
 
@@ -274,8 +303,8 @@ namespace SyncRecordingApp
                 // send to Optitrack Motive
                 if (udpClient != null)
                 {
-                    bytesSend = udpClient.Send(xmlData, xmlData.Length, "255.255.255.255", PORT_COMMAND_XML);
-                    bytesSend = udpClient.Send(xmlData, xmlData.Length, "255.255.255.255", PORT_COMMAND_XML-2);
+                    bytesSend = udpClient.Send(xmlData, xmlData.Length, "255.255.255.255", portCommandXML);
+                    bytesSend = udpClient.Send(xmlData, xmlData.Length, "255.255.255.255", portCommandXML - 2);
                     if (verbose)
                         Console.WriteLine($"[{dateTime}] udp bytes send {bytesSend}");
                 }
@@ -322,7 +351,7 @@ namespace SyncRecordingApp
 
         private static string GetApiBaseRoute()
         {
-            return $"{VERSION_LEGACY}/{API_KEY}";
+            return $"{VERSION_LEGACY}/{commandAPIKey}";
         }
 
         private static HttpClient CreateClient(int port, string url)
