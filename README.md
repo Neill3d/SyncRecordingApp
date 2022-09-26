@@ -25,3 +25,7 @@ More information about Rokoko Studio remote commands - https://docs.rokoko.com/r
 * s to toggle send xml commands to Optitrack Motive
 * v to toggle verbose, to print more details about outgoing processes
 * q to exit
+
+## Settings file
+
+ In the folder of an executable you should have ini settings file which could help to customize communication ports and parameters. If the file is not presented, it will be created on a first app run.
